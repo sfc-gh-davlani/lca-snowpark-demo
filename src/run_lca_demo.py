@@ -1,12 +1,18 @@
 """
 LCA Rule Rate Alert — Snowpark Orchestration Demo
+VERSION: 1.1.0 — Added alert threshold detection and improved logging
 """
 import datetime
+
+__version__ = "1.1.0"
+ALERT_THRESHOLD = 0.10
 
 
 def main(session) -> str:
     """Handler for Snowflake stored procedure. Called with active session."""
     schema = "DEMO_DB.LCA_DEMO"
+
+    print(f"[LCA] START version={__version__} threshold={ALERT_THRESHOLD}")
 
     # Step 1: Freshness Query
     max_date_row = session.sql(
@@ -23,6 +29,8 @@ def main(session) -> str:
     today = datetime.date.today()
     lst_dt_t = max_sub_date - datetime.timedelta(days=1) if max_sub_date == today else max_sub_date
 
+    print(f"[LCA] FRESH max_sub_date={max_sub_date} lst_dt_t={lst_dt_t}")
+
     # Step 2: Data Freshness Guard
     staleness = (today - lst_dt_t).days
     if staleness > 10:
@@ -30,6 +38,7 @@ def main(session) -> str:
 
     # Step 3: N=2..8 Loop
     results_inserted = 0
+    alerts_fired = 0
 
     for n in range(2, 9):
         report_date = today - datetime.timedelta(days=n)
@@ -52,6 +61,12 @@ def main(session) -> str:
             continue
 
         for row in rows:
+            avg_rate = float(row['AVG_RULE_RATE'])
+            alert = avg_rate > ALERT_THRESHOLD
+            if alert:
+                alerts_fired += 1
+                print(f"[LCA] ALERT N={n} rule={row['RULE_NAME']} rate={avg_rate:.4f} > {ALERT_THRESHOLD}")
+
             session.sql(f"""
                 INSERT INTO {schema}.ALERT_RESULTS
                     (report_date, n_value, rule_name, avg_rule_rate, total_loans)
@@ -61,4 +76,7 @@ def main(session) -> str:
             """).collect()
             results_inserted += 1
 
-    return f"SUCCESS: lst_dt_t={lst_dt_t}, {results_inserted} rows inserted into ALERT_RESULTS"
+        print(f"[LCA] LOOP N={n} report_date={report_date} rules={len(rows)}")
+
+    print(f"[LCA] DONE {results_inserted} rows inserted, {alerts_fired} alerts fired")
+    return f"SUCCESS v{__version__}: lst_dt_t={lst_dt_t}, {results_inserted} rows inserted, {alerts_fired} alerts fired"
